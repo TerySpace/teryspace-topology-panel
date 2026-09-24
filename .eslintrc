@@ -1,0 +1,10 @@
+{
+  "root": true,
+  "extends": ["@grafana/eslint-config"],
+  "parserOptions": {
+    "project": ["./tsconfig.json"]
+  },
+  "rules": {
+    "prettier/prettier": "off"
+  }
+}

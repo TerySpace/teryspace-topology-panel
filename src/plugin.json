@@ -1,0 +1,27 @@
+{
+  "type": "panel",
+  "name": "Topology Map Panel",
+  "id": "teryspace-topology-panel",
+  "info": {
+    "description": "Interactive topology map panel with node/link editor and query-driven statuses.",
+    "author": {
+      "name": "Custom"
+    },
+    "keywords": ["topology", "network", "map", "panel"],
+    "logos": {
+      "small": "img/logo.svg",
+      "large": "img/logo.svg"
+    },
+    "links": [],
+    "screenshots": [
+      { "name": "Topology map panel", "path": "img/screenshots/plugin.png" },
+      { "name": "Topology map editor", "path": "img/screenshots/plugin2.png" }
+    ],
+    "version": "%VERSION%",
+    "updated": "%TODAY%"
+  },
+  "dependencies": {
+    "grafanaDependency": ">=10.0.0",
+    "plugins": []
+  }
+}
