@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { css, cx, keyframes } from '@emotion/css';
 import { ThresholdsConfig } from '@grafana/data';
-import { useTheme2 } from '@grafana/ui';
+import { ConfirmModal, useTheme2 } from '@grafana/ui';
 import { MappingResult, TopologyCustomConfig, TopologyPanelOptions } from 'types';
 import { createDefaultLink, getTopologyConfig } from 'options';
 import { statusColor } from 'utils/colors';
@@ -49,6 +49,12 @@ interface LinkHover {
   id: string;
   x: number;
   y: number;
+}
+
+interface PendingConfirmation {
+  title: string;
+  body: string;
+  onConfirm: () => void;
 }
 
 const pulse = keyframes`
@@ -146,6 +152,7 @@ export const GraphCanvas: React.FC<Props> = ({ width, height, options, mapping, 
   const [scalePreview, setScalePreview] = useState<Point | null>(null);
   const [nodeContextMenu, setNodeContextMenu] = useState<NodeContextMenu | null>(null);
   const [linkHover, setLinkHover] = useState<LinkHover | null>(null);
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
   const [transform, setTransform] = useState<Transform>({ x: width * 0.05, y: height * 0.05, k: options.zoom.initial });
   const undoRef = useRef<TopologyCustomConfig[]>([]);
   const topoRef = useRef(topology);
@@ -228,18 +235,26 @@ export const GraphCanvas: React.FC<Props> = ({ width, height, options, mapping, 
       if (selectedNodeId) {
         const nodeId = selectedNodeId;
         const attached = topology.links.filter((l) => l.from === nodeId || l.to === nodeId).length;
-        if (attached > 1 && !window.confirm(`Node has ${attached} links. Delete node and all attached links?`)) {
+        const deleteNode = () => {
+          applyOptions({
+            ...options,
+            topology: {
+              ...topology,
+              nodes: topology.nodes.filter((n) => n.id !== nodeId),
+              links: topology.links.filter((l) => l.from !== nodeId && l.to !== nodeId),
+            },
+            selectedNodeId: '',
+          }, true);
+        };
+        if (attached > 1) {
+          setPendingConfirmation({
+            title: 'Delete node?',
+            body: `Node has ${attached} links. Delete the node and all attached links?`,
+            onConfirm: deleteNode,
+          });
           return;
         }
-        applyOptions({
-          ...options,
-          topology: {
-            ...topology,
-            nodes: topology.nodes.filter((n) => n.id !== nodeId),
-            links: topology.links.filter((l) => l.from !== nodeId && l.to !== nodeId),
-          },
-          selectedNodeId: '',
-        }, true);
+        deleteNode();
         return;
       }
 
@@ -1095,6 +1110,21 @@ export const GraphCanvas: React.FC<Props> = ({ width, height, options, mapping, 
             Duplicate
           </button>
         </div>
+      )}
+      {pendingConfirmation && (
+        <ConfirmModal
+          isOpen
+          title={pendingConfirmation.title}
+          body={pendingConfirmation.body}
+          confirmText="Delete"
+          confirmVariant="destructive"
+          onConfirm={() => {
+            const action = pendingConfirmation.onConfirm;
+            setPendingConfirmation(null);
+            action();
+          }}
+          onDismiss={() => setPendingConfirmation(null)}
+        />
       )}
     </div>
   );

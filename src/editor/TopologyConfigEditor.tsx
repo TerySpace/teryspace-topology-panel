@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { css } from '@emotion/css';
 import { StandardEditorProps } from '@grafana/data';
-import { useTheme2 } from '@grafana/ui';
+import { Alert, ConfirmModal, useTheme2 } from '@grafana/ui';
 import { createDefaultLink, createDefaultNode, defaultOptions } from 'options';
 import { AggregateMode, AnchorSide, IconPack, MatchBy, TopologyCustomConfig, TopologyPanelOptions } from 'types';
 import { resolveIconUrl } from 'utils/icons';
@@ -9,6 +9,13 @@ import { polylinePointAtRatio, polylinePoints } from 'graph/math';
 import { collectTargetOptions } from 'mapping/queryTargets';
 
 interface Props extends StandardEditorProps<TopologyCustomConfig, unknown, TopologyPanelOptions> {}
+
+interface PendingConfirmation {
+  title: string;
+  body: string;
+  confirmText: string;
+  onConfirm: () => void | Promise<void>;
+}
 
 const section = css`
   border: 1px solid var(--tm-border);
@@ -431,6 +438,7 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
   const filesInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
   const [fileName, setFileName] = useState('');
+  const [pendingConfirmation, setPendingConfirmation] = useState<PendingConfirmation | null>(null);
 
   const selectedNode = topology.nodes.find((n) => n.id === selectedNodeId);
   const selectedLink = topology.links.find((l) => l.id === selectedLinkId);
@@ -552,6 +560,9 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
     setSelectedNodeId(nodeId);
     setSelectedLinkId(linkId);
   };
+  const requestConfirmation = (title: string, body: string, confirmText: string, onConfirm: PendingConfirmation['onConfirm']) => {
+    setPendingConfirmation({ title, body, confirmText, onConfirm });
+  };
   const togglePackIcon = (packId: string, key: string, checked: boolean) => {
     const prev = selectedPackIcons[packId] ?? [];
     const next = checked ? [...new Set([...prev, key])] : prev.filter((k) => k !== key);
@@ -631,26 +642,30 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
     const keyName = iconName.trim() || `icon-${Date.now().toString(36)}`;
     const active = topology.iconPacks.find((p) => p.id === activePackId);
     const exists = active?.items.some((i) => i.key === keyName);
-    if (exists && !window.confirm(`Icon "${keyName}" already exists. Overwrite?`)) {
+    const saveIcon = () => {
+      patchTopology({
+        iconPacks: topology.iconPacks.map((p) =>
+          p.id !== activePackId
+            ? p
+            : {
+                ...p,
+                items: [
+                  ...p.items.filter((i) => i.key !== keyName),
+                  { key: keyName, path: payload },
+                ],
+              }
+        ),
+      });
+      setPackNotice('');
+      setIconData('');
+      setFileName('');
+      setIconName('custom-icon');
+    };
+    if (exists) {
+      requestConfirmation('Overwrite icon?', `Icon "${keyName}" already exists in this pack.`, 'Overwrite', saveIcon);
       return;
     }
-    patchTopology({
-      iconPacks: topology.iconPacks.map((p) =>
-        p.id !== activePackId
-          ? p
-          : {
-              ...p,
-              items: [
-                ...p.items.filter((i) => i.key !== keyName),
-                { key: keyName, path: payload },
-              ],
-            }
-      ),
-    });
-    setPackNotice('');
-    setIconData('');
-    setFileName('');
-    setIconName('custom-icon');
+    saveIcon();
   };
 
   const addFilesToActivePack = async (files: FileList | null) => {
@@ -673,38 +688,41 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
         overwrite.add(key);
       }
     }
-    if (overwrite.size && !window.confirm(`Overwrite ${overwrite.size} existing icon(s) in this pack?`)) {
+    const addPickedFiles = async () => {
+      const additions: IconPack['items'] = [];
+      for (const file of picked) {
+        const key = file.name.replace(/\.[^.]+$/, '');
+        if (file.name.toLowerCase().endsWith('.svg')) {
+          const txt = await file.text();
+          const trimmed = trimWhitespace ? trimSvgWhitespace(txt) : txt;
+          additions.push({ key, path: `data:image/svg+xml;utf8,${encodeURIComponent(trimmed)}` });
+        } else {
+          const dataUrl = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result ?? ''));
+            reader.readAsDataURL(file);
+          });
+          additions.push({ key, path: dataUrl });
+        }
+      }
+
+      patchTopology({
+        iconPacks: topology.iconPacks.map((p) =>
+          p.id !== activePackId
+            ? p
+            : {
+                ...p,
+                items: [...p.items.filter((i) => !additions.some((a) => a.key === i.key)), ...additions],
+              }
+        ),
+      });
+      setPackNotice('');
+    };
+    if (overwrite.size) {
+      requestConfirmation('Overwrite icons?', `Overwrite ${overwrite.size} existing icon(s) in this pack?`, 'Overwrite', addPickedFiles);
       return;
     }
-
-    const additions: IconPack['items'] = [];
-    for (const file of picked) {
-      const key = file.name.replace(/\.[^.]+$/, '');
-      if (file.name.toLowerCase().endsWith('.svg')) {
-        const txt = await file.text();
-        const trimmed = trimWhitespace ? trimSvgWhitespace(txt) : txt;
-        additions.push({ key, path: `data:image/svg+xml;utf8,${encodeURIComponent(trimmed)}` });
-      } else {
-        const dataUrl = await new Promise<string>((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result ?? ''));
-          reader.readAsDataURL(file);
-        });
-        additions.push({ key, path: dataUrl });
-      }
-    }
-
-    patchTopology({
-      iconPacks: topology.iconPacks.map((p) =>
-        p.id !== activePackId
-          ? p
-          : {
-              ...p,
-              items: [...p.items.filter((i) => !additions.some((a) => a.key === i.key)), ...additions],
-            }
-      ),
-    });
-    setPackNotice('');
+    await addPickedFiles();
   };
 
   const importFolderAsPack = async (files: FileList | null) => {
@@ -1029,7 +1047,7 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
               type="button"
               onClick={() => {
                 if (!activePackId) {
-                  window.alert('Create and select icon pack first');
+                  setPackNotice('Create and select icon pack first');
                   return;
                 }
                 filesInputRef.current?.click();
@@ -1056,14 +1074,13 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
               style={{ display: 'none' }}
               type="file"
               multiple
-              // @ts-expect-error Non-standard attribute supported by browsers.
-              webkitdirectory="true"
+              webkitdirectory=""
               onChange={(e) => void importFolderAsPack(e.target.files)}
             />
           </div>
         </div>
         <div className={row}><label>Add icon</label><button onClick={addIconToPack}>Add to pack</button></div>
-        {packNotice && <div className={css`font-size:11px;color:var(--tm-danger-top);margin-bottom:8px;`}>{packNotice}</div>}
+        {packNotice && <Alert title={packNotice} severity="error" onRemove={() => setPackNotice('')} bottomSpacing={8} />}
 
         <div className={css`height:340px;min-height:220px;max-height:640px;resize:vertical;overflow:auto;border:1px solid var(--tm-border);border-radius:7px;margin:6px 0 10px;`}>
           {topology.iconPacks.filter((p) => p.type === 'url').map((pack) => (
@@ -1087,18 +1104,17 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
                 <button
                   className={dangerBtn}
                   onClick={() => {
-                    if (!window.confirm(`Delete pack "${pack.name}"?`)) {
-                      return;
-                    }
-                    patchTopology({ iconPacks: topology.iconPacks.filter((x) => x.id !== pack.id) });
-                    setSelectedPackIcons((s) => {
-                      const next = { ...s };
-                      delete next[pack.id];
-                      return next;
+                    requestConfirmation('Delete icon pack?', `Delete pack "${pack.name}" and all of its icons?`, 'Delete', () => {
+                      patchTopology({ iconPacks: topology.iconPacks.filter((x) => x.id !== pack.id) });
+                      setSelectedPackIcons((s) => {
+                        const next = { ...s };
+                        delete next[pack.id];
+                        return next;
+                      });
+                      if (activePackId === pack.id) {
+                        setActivePackId('');
+                      }
                     });
-                    if (activePackId === pack.id) {
-                      setActivePackId('');
-                    }
                   }}
                 >
                   Delete pack
@@ -1112,18 +1128,17 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
                       className={dangerBtn}
                       onClick={() => {
                         const keys = selectedPackIcons[pack.id] ?? [];
-                        if (!window.confirm(`Delete ${keys.length} selected icon(s)?`)) {
-                          return;
-                        }
-                        patchTopology({
-                          iconPacks: topology.iconPacks.map((x) =>
-                            x.id !== pack.id ? x : { ...x, items: x.items.filter((i) => !keys.includes(i.key)) }
-                          ),
+                        requestConfirmation('Delete selected icons?', `Delete ${keys.length} selected icon(s)?`, 'Delete', () => {
+                          patchTopology({
+                            iconPacks: topology.iconPacks.map((x) =>
+                              x.id !== pack.id ? x : { ...x, items: x.items.filter((i) => !keys.includes(i.key)) }
+                            ),
+                          });
+                          setSelectedPackIcons((s) => ({ ...s, [pack.id]: [] }));
+                          if (keys.includes(activeIconKey)) {
+                            setActiveIconKey('');
+                          }
                         });
-                        setSelectedPackIcons((s) => ({ ...s, [pack.id]: [] }));
-                        if (keys.includes(activeIconKey)) {
-                          setActiveIconKey('');
-                        }
                       }}
                     >
                       Delete selected
@@ -1162,7 +1177,7 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
                             return;
                           }
                           if (pack.items.some((x) => x.key === nextName)) {
-                            window.alert('Icon with this name already exists in this pack');
+                            setPackNotice('Icon with this name already exists in this pack');
                             return;
                           }
                           patchTopology({
@@ -1206,7 +1221,7 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
                             return;
                           }
                           if (pack.items.some((x) => x.key === nextName)) {
-                            window.alert('Icon with this name already exists in this pack');
+                            setPackNotice('Icon with this name already exists in this pack');
                             return;
                           }
                           patchTopology({
@@ -1238,14 +1253,13 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
                         className={dangerBtn}
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (!window.confirm(`Delete icon "${it.key}"?`)) {
-                            return;
-                          }
-                          patchTopology({ iconPacks: topology.iconPacks.map((x) => x.id !== pack.id ? x : { ...x, items: x.items.filter((z) => z.key !== it.key) }) });
-                          setSelectedPackIcons((s) => ({ ...s, [pack.id]: (s[pack.id] ?? []).filter((k) => k !== it.key) }));
-                          if (activeIconKey === it.key) {
-                            setActiveIconKey('');
-                          }
+                          requestConfirmation('Delete icon?', `Delete icon "${it.key}"?`, 'Delete', () => {
+                            patchTopology({ iconPacks: topology.iconPacks.map((x) => x.id !== pack.id ? x : { ...x, items: x.items.filter((z) => z.key !== it.key) }) });
+                            setSelectedPackIcons((s) => ({ ...s, [pack.id]: (s[pack.id] ?? []).filter((k) => k !== it.key) }));
+                            if (activeIconKey === it.key) {
+                              setActiveIconKey('');
+                            }
+                          });
                         }}
                       >
                         Delete
@@ -1286,16 +1300,20 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
               return;
             }
             const attached = topology.links.filter((l) => l.from === selectedNode.id || l.to === selectedNode.id).length;
-            if (attached > 1 && !window.confirm(`Node has ${attached} links. Delete node and all attached links?`)) {
+            const deleteNode = () => {
+              patchTopology({
+                nodes: topology.nodes.filter((n) => n.id !== selectedNode.id),
+                links: topology.links.filter((l) => l.from !== selectedNode.id && l.to !== selectedNode.id),
+                selectedNodeId: '',
+                selectedLinkId: '',
+              });
+              setSelection('', '');
+            };
+            if (attached > 1) {
+              requestConfirmation('Delete node?', `Node has ${attached} links. Delete the node and all attached links?`, 'Delete', deleteNode);
               return;
             }
-            patchTopology({
-              nodes: topology.nodes.filter((n) => n.id !== selectedNode.id),
-              links: topology.links.filter((l) => l.from !== selectedNode.id && l.to !== selectedNode.id),
-              selectedNodeId: '',
-              selectedLinkId: '',
-            });
-            setSelection('', '');
+            deleteNode();
           }}>Delete node</button>}
         </div>
         <div className={list}>{topology.nodes.map((n) => <div key={n.id} onClick={() => { setSelection(n.id, ''); patchTopology({ selectedNodeId: n.id, selectedLinkId: '' }); }} className={css`padding:6px;cursor:pointer;${selectedNodeId === n.id ? selectedRow : normalRow}`}>{n.label}</div>)}</div>
@@ -1782,6 +1800,21 @@ export const TopologyConfigEditor: React.FC<Props> = ({ value, onChange, context
       </div>
 
       <datalist id="node-unit-list">{commonUnits.map((u) => <option key={u} value={u} />)}</datalist>
+      {pendingConfirmation && (
+        <ConfirmModal
+          isOpen
+          title={pendingConfirmation.title}
+          body={pendingConfirmation.body}
+          confirmText={pendingConfirmation.confirmText}
+          confirmVariant="destructive"
+          onConfirm={() => {
+            const action = pendingConfirmation.onConfirm;
+            setPendingConfirmation(null);
+            return action();
+          }}
+          onDismiss={() => setPendingConfirmation(null)}
+        />
+      )}
     </div>
   );
 };
